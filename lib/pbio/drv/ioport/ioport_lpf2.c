@@ -29,6 +29,57 @@
 
 #include "ioport_lpf2.h"
 
+// noserial: 0:A 1:B 2:C 3:D 4:E 5:F
+// serial F: 0:A 1:B 2:C 3:D 4:E
+// serial E: 0:A 1:B 2:C 3:D 4:F
+// serial D: 0:A 1:B 2:C 3:E 4:F
+static int port_to_index(char port)
+{
+    int index = 0;
+    switch (port) {
+#if PBDRV_CONFIG_HAS_PORT_F
+    case PBIO_PORT_ID_F: index++;
+                         __attribute__ ((fallthrough));
+#endif
+#if PBDRV_CONFIG_HAS_PORT_E
+    case PBIO_PORT_ID_E: index++;
+                         __attribute__ ((fallthrough));
+#endif
+#if PBDRV_CONFIG_HAS_PORT_D
+    case PBIO_PORT_ID_D: index++;
+                         __attribute__ ((fallthrough));
+#endif
+    case PBIO_PORT_ID_C: index++;
+                         __attribute__ ((fallthrough));
+    case PBIO_PORT_ID_B: index++;
+//  case PBIO_PORT_ID_A: 
+    }
+    return index;
+}
+
+static char index_to_port(int index)
+{
+    char port = PBDRV_CONFIG_IOPORT_LPF2_FIRST_PORT;
+    switch (index) {
+    case 5: port++;
+            __attribute__ ((fallthrough));
+    case 4: port++;
+#if !PBDRV_CONFIG_HAS_PORT_E
+            port++;
+#endif
+            __attribute__ ((fallthrough));
+    case 3: port++;
+#if !PBDRV_CONFIG_HAS_PORT_D
+            port++;
+#endif
+            __attribute__ ((fallthrough));
+    case 2: port++;
+            __attribute__ ((fallthrough));
+    case 1: port++;
+//  case 0: 
+    }
+    return port;
+}
 /** The number of consecutive repeated detections needed for an affirmative ID. */
 #define AFFIRMATIVE_MATCH_COUNT 20
 
@@ -187,7 +238,8 @@ static void init_one(uint8_t ioport) {
     pbdrv_gpio_set_pull(&pdata->uart_tx, PBDRV_GPIO_PULL_NONE);
     pbdrv_gpio_set_pull(&pdata->uart_rx, PBDRV_GPIO_PULL_NONE);
 
-    basic_devs[ioport].port = PBDRV_CONFIG_IOPORT_LPF2_FIRST_PORT + ioport;
+    char port = index_to_port(ioport);
+    basic_devs[ioport].port = port;
     basic_devs[ioport].ops = &basic_dev_ops;
 }
 
@@ -197,7 +249,8 @@ pbio_error_t pbdrv_ioport_get_iodev(pbio_port_id_t port, pbio_iodev_t **iodev) {
         return PBIO_ERROR_INVALID_ARG;
     }
 
-    ioport_dev_t *ioport = &ioport_devs[port - PBDRV_CONFIG_IOPORT_LPF2_FIRST_PORT];
+    int index = port_to_index(port);
+    ioport_dev_t *ioport = &ioport_devs[index];
 
     if (ioport->dcm.dev_id_match_count < AFFIRMATIVE_MATCH_COUNT) {
         // the device connection manager hasn't figured out what is or isn't connected yet
@@ -489,7 +542,7 @@ PROCESS_THREAD(pbdrv_ioport_lpf2_process, ev, data) {
                 ioport_dev_t *ioport = &ioport_devs[i];
 
                 if (ioport->iodev == (pbio_iodev_t *)data) {
-                    debug_pr("ioport(%c): Received stop.\n", i + PBDRV_CONFIG_IOPORT_LPF2_FIRST_PORT);
+                    debug_pr("ioport(%c): Received stop.\n", index_to_port(i));
                     ioport->connected_type_id = PBIO_IODEV_TYPE_ID_NONE;
                 }
             }
@@ -504,21 +557,21 @@ PROCESS_THREAD(pbdrv_ioport_lpf2_process, ev, data) {
                 }
 
                 if (ioport->connected_type_id != ioport->prev_type_id) {
-                    debug_pr("ioport(%c): Type changed from %d to %d.\n", i + PBDRV_CONFIG_IOPORT_LPF2_FIRST_PORT,
+                    debug_pr("ioport(%c): Type changed from %d to %d.\n", index_to_port(i),
                         ioport->prev_type_id, ioport->connected_type_id);
                     ioport->prev_type_id = ioport->connected_type_id;
                     if (ioport->connected_type_id == PBIO_IODEV_TYPE_ID_LPF2_UNKNOWN_UART) {
-                        debug_pr("ioport(%c): UART device detected.\n", i + PBDRV_CONFIG_IOPORT_LPF2_FIRST_PORT);
+                        debug_pr("ioport(%c): UART device detected.\n", port);
                         ioport_enable_uart(ioport);
                         _Static_assert(PBDRV_CONFIG_IOPORT_LPF2_NUM_PORTS == PBIO_CONFIG_UARTDEV_NUM_DEV,
                             "code assumes port ID is same as uartdev ID");
                         pbio_uartdev_ready(i);
                         pbio_uartdev_get(i, &ioport->iodev);
                     } else if (ioport->connected_type_id == PBIO_IODEV_TYPE_ID_NONE) {
-                        debug_pr("ioport(%c): Device unplugged.\n", i + PBDRV_CONFIG_IOPORT_LPF2_FIRST_PORT);
+                        debug_pr("ioport(%c): Device unplugged.\n", index_to_port(i));
                         ioport->iodev = NULL;
                     } else {
-                        debug_pr("ioport(%c): Passive device detected.\n", i + PBDRV_CONFIG_IOPORT_LPF2_FIRST_PORT);
+                        debug_pr("ioport(%c): Passive device detected.\n", port);
                         assert(ioport->connected_type_id < PBIO_IODEV_TYPE_ID_LPF2_UNKNOWN_UART);
                         ioport->iodev = &basic_devs[i];
                         ioport->iodev->info = &basic_infos[ioport->connected_type_id].info;
