@@ -43,7 +43,9 @@ enum {
     COUNTER_PORT_A,
     COUNTER_PORT_B,
     COUNTER_PORT_C,
+#if PBDRV_CONFIG_HAS_PORT_D
     COUNTER_PORT_D,
+#endif
 #if PBDRV_CONFIG_HAS_PORT_E
     COUNTER_PORT_E,
 #endif
@@ -83,7 +85,9 @@ enum {
     UART_PORT_A,
     UART_PORT_B,
     UART_PORT_C,
+#if PBDRV_CONFIG_HAS_PORT_D
     UART_PORT_D,
+#endif
 #if PBDRV_CONFIG_HAS_PORT_E
     UART_PORT_E,
 #endif
@@ -179,10 +183,12 @@ const pbdrv_counter_lpf2_platform_data_t pbdrv_counter_lpf2_platform_data[PBDRV_
         .counter_id = COUNTER_PORT_C,
         .port_id = PBIO_PORT_ID_C,
     },
+#if PBDRV_CONFIG_HAS_PORT_D
     [COUNTER_PORT_D] = {
         .counter_id = COUNTER_PORT_D,
         .port_id = PBIO_PORT_ID_D,
     },
+#endif
 #if PBDRV_CONFIG_HAS_PORT_E
     [COUNTER_PORT_E] = {
         .counter_id = COUNTER_PORT_E,
@@ -288,6 +294,7 @@ const pbdrv_ioport_lpf2_platform_data_t pbdrv_ioport_lpf2_platform_data = {
             .uart_rx = { .bank = GPIOE, .pin = 0  },
             .alt = GPIO_AF8_UART8,
         },
+#if PBDRV_CONFIG_HAS_PORT_D
         // Port D
         {
             .id1 = { .bank = GPIOC, .pin = 15 },
@@ -297,6 +304,7 @@ const pbdrv_ioport_lpf2_platform_data_t pbdrv_ioport_lpf2_platform_data = {
             .uart_rx = { .bank = GPIOD, .pin = 2  },
             .alt = GPIO_AF8_UART5,
         },
+#endif
 #if PBDRV_CONFIG_HAS_PORT_E
         // Port E
         {
@@ -691,10 +699,12 @@ const pbdrv_uart_stm32f4_ll_irq_platform_data_t
         .uart = UART8,
         .irq = UART8_IRQn,
     },
+#if PBDRV_CONFIG_HAS_PORT_D
     [UART_PORT_D] = {
         .uart = UART5,
         .irq = UART5_IRQn,
     },
+#endif
 #if PBDRV_CONFIG_HAS_PORT_E
     [UART_PORT_E] = {
         .uart = UART10,
@@ -714,10 +724,12 @@ void UART4_IRQHandler(void) {
     pbdrv_uart_stm32f4_ll_irq_handle_irq(UART_PORT_B);
 }
 
+#if PBDRV_CONFIG_HAS_PORT_D
 // overrides weak function in setup.m
 void UART5_IRQHandler(void) {
     pbdrv_uart_stm32f4_ll_irq_handle_irq(UART_PORT_D);
 }
+#endif
 
 // overrides weak function in setup.m
 void UART7_IRQHandler(void) {
@@ -753,9 +765,11 @@ const pbio_uartdev_platform_data_t pbio_uartdev_platform_data[PBIO_CONFIG_UARTDE
     [COUNTER_PORT_C] = {
         .uart_id = UART_PORT_C,
     },
+#if PBDRV_CONFIG_HAS_PORT_D
     [COUNTER_PORT_D] = {
         .uart_id = UART_PORT_D,
     },
+#endif
 #if PBDRV_CONFIG_HAS_PORT_E
     [COUNTER_PORT_E] = {
         .uart_id = UART_PORT_E,
