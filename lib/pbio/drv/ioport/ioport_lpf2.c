@@ -561,7 +561,7 @@ PROCESS_THREAD(pbdrv_ioport_lpf2_process, ev, data) {
                         ioport->prev_type_id, ioport->connected_type_id);
                     ioport->prev_type_id = ioport->connected_type_id;
                     if (ioport->connected_type_id == PBIO_IODEV_TYPE_ID_LPF2_UNKNOWN_UART) {
-                        debug_pr("ioport(%c): UART device detected.\n", port);
+                        debug_pr("ioport(%c): UART device detected.\n", index_to_port(i));
                         ioport_enable_uart(ioport);
                         _Static_assert(PBDRV_CONFIG_IOPORT_LPF2_NUM_PORTS == PBIO_CONFIG_UARTDEV_NUM_DEV,
                             "code assumes port ID is same as uartdev ID");
@@ -571,7 +571,7 @@ PROCESS_THREAD(pbdrv_ioport_lpf2_process, ev, data) {
                         debug_pr("ioport(%c): Device unplugged.\n", index_to_port(i));
                         ioport->iodev = NULL;
                     } else {
-                        debug_pr("ioport(%c): Passive device detected.\n", port);
+                        debug_pr("ioport(%c): Passive device detected.\n", index_to_port(i));
                         assert(ioport->connected_type_id < PBIO_IODEV_TYPE_ID_LPF2_UNKNOWN_UART);
                         ioport->iodev = &basic_devs[i];
                         ioport->iodev->info = &basic_infos[ioport->connected_type_id].info;
