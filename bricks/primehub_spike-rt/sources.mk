@@ -44,8 +44,6 @@ PYBRICKS_PYBRICKS_SRC_C = $(addprefix pybricks/,\
 	ev3devices/pb_type_ev3devices_touchsensor.c \
 	ev3devices/pb_type_ev3devices_ultrasonicsensor.c \
 	experimental/pb_module_experimental.c \
-	geometry/pb_module_geometry.c \
-	geometry/pb_type_matrix.c \
 	hubs/pb_module_hubs.c \
 	hubs/pb_type_cityhub.c \
 	hubs/pb_type_essentialhub.c \
@@ -190,6 +188,8 @@ PBIO_SRC_C = $(addprefix lib/pbio/,\
 	src/differentiator.c \
 	src/drivebase.c \
 	src/error.c \
+	src/geometry.c \
+	src/imu.c \
 	src/int_math.c \
 	src/integrator.c \
 	src/iodev.c \
@@ -223,6 +223,8 @@ PBIO_SRC_C = $(addprefix lib/pbio/,\
 	sys/program_load.c \
 	sys/program_stop.c \
 	sys/status.c \
+	sys/storage.c \
+	sys/storage_settings.c \
 	sys/supervisor.c \
 	)
 

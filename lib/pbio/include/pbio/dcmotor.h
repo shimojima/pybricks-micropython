@@ -63,6 +63,9 @@ typedef struct _pbio_dcmotor_t {
 
 void pbio_dcmotor_stop_all(bool clear_parents);
 
+// Backport from v3.6.1
+bool pbio_dcmotor_all_coasting(void);
+
 // Setup and status:
 
 pbio_error_t pbio_dcmotor_close(pbio_dcmotor_t *dcmotor);

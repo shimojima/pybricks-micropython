@@ -6,6 +6,7 @@
 #define PBIO_CONFIG_BATTERY                 (1)
 #define PBIO_CONFIG_DCMOTOR                 (1)
 #define PBIO_CONFIG_DRIVEBASE_SPIKE         (1)
+#define PBIO_CONFIG_IMU                     (1)
 #define PBIO_CONFIG_LIGHT                   (1)
 #define PBIO_CONFIG_LOGGER                  (1)
 #define PBIO_CONFIG_LIGHT_MATRIX            (1)
@@ -18,7 +19,8 @@
 //#define SPIKE_RT_CONFIG_USE_PORT_F_AS_USER_UART   (1)
 //#define SPIKE_RT_CONFIG_USE_PORT_E_AS_USER_UART   (0)
 
-#define PBIO_CONFIG_USE_PORT_F_AS_ASP3_DEBUG_UART  (1)
+//#define PBIO_CONFIG_USE_PORT_F_AS_ASP3_DEBUG_UART  (1)
+#define PBIO_CONFIG_USE_PORT_F_AS_ASP3_DEBUG_UART  (0)
 
 #define PBIO_CONFIG_UARTDEV                 (1)
 #if PBIO_CONFIG_USE_PORT_F_AS_ASP3_DEBUG_UART

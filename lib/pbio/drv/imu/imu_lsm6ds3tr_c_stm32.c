@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Copyright (c) 2020-2022 The Pybricks Authors
+// Copyright (c) 2020-2023 The Pybricks Authors
 
 // IMU driver for STMicroelectronics LSM6DS3TR-C accel/gyro connected to STM32 MCU.
 
@@ -8,9 +8,11 @@
 
 #if PBDRV_CONFIG_IMU_LSM6S3TR_C_STM32
 
+#include <stdatomic.h>
 #include <stdint.h>
 #include <string.h>
 
+#include <pbdrv/clock.h>
 #include <pbdrv/imu.h>
 
 #include <contiki.h>
@@ -39,15 +41,46 @@ struct _pbdrv_imu_dev_t {
     stmdev_ctx_t ctx;
     /** STM32 HAL I2C context. */
     I2C_HandleTypeDef hi2c;
-    /** Scale factor to convert raw data to degrees per second. */
-    float gyro_scale;
-    /** Scale factor to convert raw data to m/s^2. */
-    float accel_scale;
-    /** Raw data. */
-    int16_t data[7];
+    /** IMU configuration to convert raw data to phsyical units. */
+    pbdrv_imu_config_t config;
+    /** Callback to process one frame of unfiltered gyro and accelerometer data. */
+    pbdrv_imu_handle_frame_data_func_t handle_frame_data;
+    /* Callback to process unfiltered gyro and accelerometer data recorded while stationary. */
+    pbdrv_imu_handle_stationary_data_func_t handle_stationary_data;
+    /** Latest raw data. */
+    int16_t data[6];
+    /** Most recent slow moving average of raw data. */
+    int16_t data_slow[6];
+    /** Sum of raw data for slow moving average. */
+    int32_t data_slow_sum[6];
+    /** Raw data count used for slow moving average. */
+    int32_t data_slow_count;
+    /** Start time of window in which stationary samples are recorded (us)*/
+    uint32_t stationary_time_start;
+    /** Raw data point to which new samples are compared to detect stationary. */
+    int16_t stationary_data_start[6];
+    /** Sum of gyro samples during the stationary period. */
+    int32_t stationary_gyro_data_sum[3];
+    /** Sum of accelerometer samples during the stationary period. */
+    int32_t stationary_accel_data_sum[3];
+    /** Number of sequential stationary samples. */
+    uint32_t stationary_sample_count;
+    /** Whether it is currently stationary, to be polled by higher level APIs. */
+    bool stationary_now;
     /** Initialization state. */
     imu_init_state_t init_state;
+    /** INT1 oneshot. */
+    volatile bool int1;
 };
+
+/** The size of the data field in pbdrv_imu_dev_t in bytes. */
+#define NUM_DATA_BYTES sizeof(((struct _pbdrv_imu_dev_t *)0)->data)
+
+/** All data rate dependent values should be defined here so it is clear
+ *  what needs to be changed when the data rate is changed. */
+#define LSM6DS3TR_INITIAL_DATA_RATE (833)
+#define LSM6DS3TR_GYRO_DATA_RATE (LSM6DS3TR_C_GY_ODR_833Hz)
+#define LSM6DS3TR_ACCL_DATA_RATE (LSM6DS3TR_C_XL_ODR_833Hz)
 
 static pbdrv_imu_dev_t global_imu_dev;
 PROCESS(pbdrv_imu_lsm6ds3tr_c_stm32_process, "LSM6DS3TR-C");
@@ -73,8 +106,23 @@ void HAL_I2C_MemRxCpltCallback(I2C_HandleTypeDef *hi2c) {
     process_poll(&pbdrv_imu_lsm6ds3tr_c_stm32_process);
 }
 
+void HAL_I2C_MasterTxCpltCallback(I2C_HandleTypeDef *hi2c) {
+    global_imu_dev.ctx.read_write_done = true;
+    process_poll(&pbdrv_imu_lsm6ds3tr_c_stm32_process);
+}
+
+void HAL_I2C_MasterRxCpltCallback(I2C_HandleTypeDef *hi2c) {
+    global_imu_dev.ctx.read_write_done = true;
+    process_poll(&pbdrv_imu_lsm6ds3tr_c_stm32_process);
+}
+
 void HAL_I2C_ErrorCallback(I2C_HandleTypeDef *hi2c) {
     global_imu_dev.ctx.read_write_done = true;
+    process_poll(&pbdrv_imu_lsm6ds3tr_c_stm32_process);
+}
+
+void pbdrv_imu_lsm6ds3tr_c_stm32_handle_int1_irq(void) {
+    global_imu_dev.int1 = true;
     process_poll(&pbdrv_imu_lsm6ds3tr_c_stm32_process);
 }
 
@@ -169,36 +217,38 @@ static PT_THREAD(pbdrv_imu_lsm6ds3tr_c_stm32_init(struct pt *pt)) {
     /*
      * Set Output Data Rate
      */
-    PT_SPAWN(pt, &child, lsm6ds3tr_c_xl_data_rate_set(&child, ctx, LSM6DS3TR_C_XL_ODR_833Hz));
-    PT_SPAWN(pt, &child, lsm6ds3tr_c_gy_data_rate_set(&child, ctx, LSM6DS3TR_C_GY_ODR_833Hz));
+    PT_SPAWN(pt, &child, lsm6ds3tr_c_xl_data_rate_set(&child, ctx, LSM6DS3TR_ACCL_DATA_RATE));
+    PT_SPAWN(pt, &child, lsm6ds3tr_c_gy_data_rate_set(&child, ctx, LSM6DS3TR_GYRO_DATA_RATE));
+
+    // This value varies per device and is updated during runtime. This sets
+    // an initial value in case the calibration never completes.
+    imu_dev->config.sample_time = (1.0f / LSM6DS3TR_INITIAL_DATA_RATE);
 
     /*
      * Set scale
      */
     PT_SPAWN(pt, &child, lsm6ds3tr_c_xl_full_scale_set(&child, ctx, LSM6DS3TR_C_8g));
-    imu_dev->accel_scale = lsm6ds3tr_c_from_fs8g_to_mg(1) * 9.81f;
+    imu_dev->config.accel_scale = lsm6ds3tr_c_from_fs8g_to_mg(1) * 9.81f;
 
-    PT_SPAWN(pt, &child, lsm6ds3tr_c_gy_full_scale_set(&child, ctx, LSM6DS3TR_C_1000dps));
-    imu_dev->gyro_scale = lsm6ds3tr_c_from_fs1000dps_to_mdps(1) / 1000.0f;
+    PT_SPAWN(pt, &child, lsm6ds3tr_c_gy_full_scale_set(&child, ctx, LSM6DS3TR_C_2000dps));
+    imu_dev->config.gyro_scale = lsm6ds3tr_c_from_fs2000dps_to_mdps(1) / 1000.0f;
 
-    /*
-     * Configure filtering chain(No aux interface)
-     */
-    /* Accelerometer - analog filter */
-    // PT_SPAWN(pt, &child, lsm6ds3tr_c_xl_filter_analog_set(&child, ctx, LSM6DS3TR_C_XL_ANA_BW_400Hz));
+    // Noise thresholds. Will be loaded from user preferences. Can be changed
+    // during runtime. Zero for now, so measurements are never lower. So
+    // calibration will not start until these values are loaded or set.
+    imu_dev->config.gyro_stationary_threshold = 0;
+    imu_dev->config.accel_stationary_threshold = 0;
 
-    /* Accelerometer - LPF1 path ( LPF2 not used )*/
-    // PT_SPAWN(pt, &child, lsm6ds3tr_c_xl_lp1_bandwidth_set(&child, ctx, LSM6DS3TR_C_XL_LP1_ODR_DIV_4));
+    // Configure INT1 to trigger when new gyro data is ready.
+    PT_SPAWN(pt, &child, lsm6ds3tr_c_pin_int1_route_set(&child, ctx, (lsm6ds3tr_c_int1_route_t) {
+        .int1_drdy_g = 1,
+    }));
 
-    /* Accelerometer - LPF1 + LPF2 path */
-    // PT_SPAWN(pt, &child, lsm6ds3tr_c_xl_lp2_bandwidth_set(&child, ctx, LSM6DS3TR_C_XL_LOW_NOISE_LP_ODR_DIV_100));
+    // If we leave the default latched mode, sometimes we don't get the INT1 interrupt.
+    PT_SPAWN(pt, &child, lsm6ds3tr_c_data_ready_mode_set(&child, ctx, LSM6DS3TR_C_DRDY_PULSED));
 
-    /* Accelerometer - High Pass / Slope path */
-    // PT_SPAWN(pt, &child, lsm6ds3tr_c_xl_reference_mode_set(&child, ctx, PROPERTY_DISABLE));
-    // PT_SPAWN(pt, &child, lsm6ds3tr_c_xl_hp_bandwidth_set(&child, ctx, LSM6DS3TR_C_XL_HP_ODR_DIV_100));
-
-    /* Gyroscope - filtering chain */
-    // PT_SPAWN(pt, &child, lsm6ds3tr_c_gy_band_pass_set(&child, ctx, LSM6DS3TR_C_HP_16mHz_LP1_LIGHT));
+    // Enable rounding mode so we can get gyro + accel in continuous reads.
+    PT_SPAWN(pt, &child, lsm6ds3tr_c_rounding_mode_set(&child, ctx, LSM6DS3TR_C_ROUND_GY_XL));
 
     if (HAL_I2C_GetError(hi2c) != HAL_I2C_ERROR_NONE) {
         imu_dev->init_state = IMU_INIT_STATE_FAILED;
@@ -210,12 +260,89 @@ static PT_THREAD(pbdrv_imu_lsm6ds3tr_c_stm32_init(struct pt *pt)) {
     PT_END(pt);
 }
 
+static inline bool is_bounded(int16_t diff, int16_t threshold) {
+    return diff < threshold && diff > -threshold;
+}
+
+static void pbdrv_imu_lsm6ds3tr_c_stm32_reset_stationary_buffer(pbdrv_imu_dev_t *imu_dev) {
+    imu_dev->stationary_sample_count = 0;
+    imu_dev->stationary_time_start = pbdrv_clock_get_us();
+    memset(&imu_dev->stationary_accel_data_sum, 0, sizeof(imu_dev->stationary_accel_data_sum));
+    memset(&imu_dev->stationary_gyro_data_sum, 0, sizeof(imu_dev->stationary_gyro_data_sum));
+}
+
+static void pbdrv_imu_lsm6ds3tr_c_stm32_update_slow_moving_average(pbdrv_imu_dev_t *imu_dev) {
+    for (uint32_t i = 0; i < 6; i++) {
+        imu_dev->data_slow_sum[i] += imu_dev->data[i];
+    }
+    imu_dev->data_slow_count++;
+    if (imu_dev->data_slow_count == 125) {
+        for (uint32_t i = 0; i < 6; i++) {
+            imu_dev->data_slow[i] = imu_dev->data_slow_sum[i] / imu_dev->data_slow_count;
+            imu_dev->data_slow_sum[i] = 0;
+        }
+        imu_dev->data_slow_count = 0;
+    }
+}
+
+static void pbdrv_imu_lsm6ds3tr_c_stm32_update_stationary_status(pbdrv_imu_dev_t *imu_dev) {
+
+    // Update slow moving average of raw data, used as starting point for stationary detection.
+    pbdrv_imu_lsm6ds3tr_c_stm32_update_slow_moving_average(imu_dev);
+
+    // Check whether still stationary compared to constant start sample.
+    if (!is_bounded(imu_dev->data[0] - imu_dev->stationary_data_start[0], imu_dev->config.gyro_stationary_threshold) ||
+        !is_bounded(imu_dev->data[1] - imu_dev->stationary_data_start[1], imu_dev->config.gyro_stationary_threshold) ||
+        !is_bounded(imu_dev->data[2] - imu_dev->stationary_data_start[2], imu_dev->config.gyro_stationary_threshold) ||
+        !is_bounded(imu_dev->data[3] - imu_dev->stationary_data_start[3], imu_dev->config.accel_stationary_threshold) ||
+        !is_bounded(imu_dev->data[4] - imu_dev->stationary_data_start[4], imu_dev->config.accel_stationary_threshold) ||
+        !is_bounded(imu_dev->data[5] - imu_dev->stationary_data_start[5], imu_dev->config.accel_stationary_threshold)
+        ) {
+        // Not stationary anymore, so reset counter and gyro sum data so we can start over.
+        imu_dev->stationary_now = false;
+
+        // Slow moving average becomes new starting value to compare to.
+        memcpy(&imu_dev->stationary_data_start[0], &imu_dev->data_slow[0], sizeof(imu_dev->stationary_data_start));
+
+        pbdrv_imu_lsm6ds3tr_c_stm32_reset_stationary_buffer(imu_dev);
+        return;
+    }
+
+    // Updating running sum of stationary data.
+    imu_dev->stationary_sample_count++;
+    imu_dev->stationary_gyro_data_sum[0] += imu_dev->data[0];
+    imu_dev->stationary_gyro_data_sum[1] += imu_dev->data[1];
+    imu_dev->stationary_gyro_data_sum[2] += imu_dev->data[2];
+    imu_dev->stationary_accel_data_sum[0] += imu_dev->data[3];
+    imu_dev->stationary_accel_data_sum[1] += imu_dev->data[4];
+    imu_dev->stationary_accel_data_sum[2] += imu_dev->data[5];
+
+    // Exit if we don't have enough samples yet.
+    if (imu_dev->stationary_sample_count < LSM6DS3TR_INITIAL_DATA_RATE) {
+        return;
+    }
+
+    // This tells external APIs that we are really stationary.
+    imu_dev->stationary_now = true;
+
+    // The actual sampling rate is slightly different from the configured rate, so measure it.
+    imu_dev->config.sample_time = (pbdrv_clock_get_us() - imu_dev->stationary_time_start) / 1000000.0f / imu_dev->stationary_sample_count;
+
+    // Process the data recorded while stationary.
+    if (imu_dev->handle_stationary_data) {
+        imu_dev->handle_stationary_data(imu_dev->stationary_gyro_data_sum, imu_dev->stationary_accel_data_sum, imu_dev->stationary_sample_count);
+    }
+
+    // Reset counter and gyro sum data so we can start over.
+    pbdrv_imu_lsm6ds3tr_c_stm32_reset_stationary_buffer(imu_dev);
+}
+
 PROCESS_THREAD(pbdrv_imu_lsm6ds3tr_c_stm32_process, ev, data) {
     pbdrv_imu_dev_t *imu_dev = &global_imu_dev;
     I2C_HandleTypeDef *hi2c = &imu_dev->hi2c;
 
     static struct pt child;
-    static uint8_t buf[6];
+    static uint8_t buf[NUM_DATA_BYTES];
 
     PROCESS_BEGIN();
 
@@ -228,29 +355,64 @@ PROCESS_THREAD(pbdrv_imu_lsm6ds3tr_c_stm32_process, ev, data) {
         PROCESS_EXIT();
     }
 
+retry:
+    // Write the register address of the start of the gyro and accel data.
+    buf[0] = LSM6DS3TR_C_OUTX_L_G;
+    imu_dev->ctx.read_write_done = false;
+    HAL_StatusTypeDef ret = HAL_I2C_Master_Seq_Transmit_IT(
+        &imu_dev->hi2c, LSM6DS3TR_C_I2C_ADD_L, buf, 1, I2C_FIRST_FRAME);
+
+    if (ret != HAL_OK) {
+        pbdrv_imu_lsm6ds3tr_c_stm32_i2c_reset(hi2c);
+        goto retry;
+    }
+
+    PROCESS_WAIT_UNTIL(imu_dev->ctx.read_write_done);
+
+    if (HAL_I2C_GetError(hi2c) != HAL_I2C_ERROR_NONE) {
+        pbdrv_imu_lsm6ds3tr_c_stm32_i2c_reset(hi2c);
+        goto retry;
+    }
+
+    // Since we configured the IMU to enable "rounding" on the accel and gyro
+    // data registers, we can just keep reading forever and it automatically
+    // loops around. This way we don't have to keep writing the register
+    // value each time we want to read new data. This saves CPU usage since
+    // we have fewer interrupts per sample.
+
     for (;;) {
-        PROCESS_PT_SPAWN(&child, lsm6ds3tr_c_acceleration_raw_get(&child, &imu_dev->ctx, buf));
+        PROCESS_WAIT_EVENT_UNTIL(atomic_exchange(&imu_dev->int1, false));
 
-        if (HAL_I2C_GetError(hi2c) == HAL_I2C_ERROR_NONE) {
-            memcpy(&imu_dev->data[0], buf, 6);
-        } else {
+        imu_dev->ctx.read_write_done = false;
+        ret = HAL_I2C_Master_Seq_Receive_IT(
+            &imu_dev->hi2c, LSM6DS3TR_C_I2C_ADD_L, buf, NUM_DATA_BYTES, I2C_NEXT_FRAME);
+
+        if (ret != HAL_OK) {
             pbdrv_imu_lsm6ds3tr_c_stm32_i2c_reset(hi2c);
+            goto retry;
         }
 
-        PROCESS_PT_SPAWN(&child, lsm6ds3tr_c_angular_rate_raw_get(&child, &imu_dev->ctx, buf));
+        PROCESS_WAIT_UNTIL(imu_dev->ctx.read_write_done);
 
-        if (HAL_I2C_GetError(hi2c) == HAL_I2C_ERROR_NONE) {
-            memcpy(&imu_dev->data[3], buf, 6);
-        } else {
+        if (HAL_I2C_GetError(hi2c) != HAL_I2C_ERROR_NONE) {
             pbdrv_imu_lsm6ds3tr_c_stm32_i2c_reset(hi2c);
+            goto retry;
         }
 
-        PROCESS_PT_SPAWN(&child, lsm6ds3tr_c_temperature_raw_get(&child, &imu_dev->ctx, buf));
+        memcpy(&imu_dev->data[0], buf, NUM_DATA_BYTES);
 
-        if (HAL_I2C_GetError(hi2c) == HAL_I2C_ERROR_NONE) {
-            memcpy(&imu_dev->data[6], buf, 2);
-        } else {
-            pbdrv_imu_lsm6ds3tr_c_stm32_i2c_reset(hi2c);
+        // Account for mounting orientation in hub. Any other tranformations
+        // are applied at the higher level in pbio.
+        imu_dev->data[0] *= PBDRV_CONFIG_IMU_LSM6S3TR_C_STM32_SIGN_X;
+        imu_dev->data[1] *= PBDRV_CONFIG_IMU_LSM6S3TR_C_STM32_SIGN_Y;
+        imu_dev->data[2] *= PBDRV_CONFIG_IMU_LSM6S3TR_C_STM32_SIGN_Z;
+        imu_dev->data[3] *= PBDRV_CONFIG_IMU_LSM6S3TR_C_STM32_SIGN_X;
+        imu_dev->data[4] *= PBDRV_CONFIG_IMU_LSM6S3TR_C_STM32_SIGN_Y;
+        imu_dev->data[5] *= PBDRV_CONFIG_IMU_LSM6S3TR_C_STM32_SIGN_Z;
+
+        pbdrv_imu_lsm6ds3tr_c_stm32_update_stationary_status(imu_dev);
+        if (imu_dev->handle_frame_data) {
+            imu_dev->handle_frame_data(imu_dev->data);
         }
     }
 
@@ -266,8 +428,9 @@ void pbdrv_imu_init(void) {
 
 // public driver interface implementation
 
-pbio_error_t pbdrv_imu_get_imu(pbdrv_imu_dev_t **imu_dev) {
+pbio_error_t pbdrv_imu_get_imu(pbdrv_imu_dev_t **imu_dev, pbdrv_imu_config_t **config) {
     *imu_dev = &global_imu_dev;
+    *config = &global_imu_dev.config;
 
     if ((*imu_dev)->init_state == IMU_INIT_STATE_BUSY) {
         return PBIO_ERROR_AGAIN;
@@ -280,25 +443,13 @@ pbio_error_t pbdrv_imu_get_imu(pbdrv_imu_dev_t **imu_dev) {
     return PBIO_SUCCESS;
 }
 
-void pbdrv_imu_accel_read(pbdrv_imu_dev_t *imu_dev, float *values) {
-    // Output is signed such that we have a right handed coordinate system where:
-    // Forward acceleration is +X, upward acceleration is +Z and acceleration to the left is +Y.
-    values[0] = PBDRV_CONFIG_IMU_LSM6S3TR_C_STM32_SIGN_X * imu_dev->data[0] * imu_dev->accel_scale;
-    values[1] = PBDRV_CONFIG_IMU_LSM6S3TR_C_STM32_SIGN_Y * imu_dev->data[1] * imu_dev->accel_scale;
-    values[2] = PBDRV_CONFIG_IMU_LSM6S3TR_C_STM32_SIGN_Z * imu_dev->data[2] * imu_dev->accel_scale;
+void pbdrv_imu_set_data_handlers(pbdrv_imu_dev_t *imu_dev, pbdrv_imu_handle_frame_data_func_t frame_data_func, pbdrv_imu_handle_stationary_data_func_t stationary_data_func) {
+    imu_dev->handle_frame_data = frame_data_func;
+    imu_dev->handle_stationary_data = stationary_data_func;
 }
 
-void pbdrv_imu_gyro_read(pbdrv_imu_dev_t *imu_dev, float *values) {
-    // Output is signed such that we have a right handed coordinate system
-    // consistent with the coordinate system above. Positive rotations along
-    // those axes then follow the right hand rule.
-    values[0] = PBDRV_CONFIG_IMU_LSM6S3TR_C_STM32_SIGN_X * imu_dev->data[3] * imu_dev->gyro_scale;
-    values[1] = PBDRV_CONFIG_IMU_LSM6S3TR_C_STM32_SIGN_Y * imu_dev->data[4] * imu_dev->gyro_scale;
-    values[2] = PBDRV_CONFIG_IMU_LSM6S3TR_C_STM32_SIGN_Z * imu_dev->data[5] * imu_dev->gyro_scale;
-}
-
-float pbdrv_imu_temperature_read(pbdrv_imu_dev_t *imu_dev) {
-    return lsm6ds3tr_c_from_lsb_to_celsius(imu_dev->data[6]);
+bool pbdrv_imu_is_stationary(pbdrv_imu_dev_t *imu_dev) {
+    return imu_dev->stationary_now;
 }
 
 #endif // PBDRV_CONFIG_IMU_LSM6S3TR_C_STM32

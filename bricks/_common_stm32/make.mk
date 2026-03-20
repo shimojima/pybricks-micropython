@@ -180,9 +180,9 @@ SRC_S = \
 	lib/pbio/platform/$(PBIO_PLATFORM)/startup.s \
 
 ifeq ($(PB_MCU_SERIES),F0)
-	SRC_S += shared/runtime/gchelper_m0.s
+	SRC_S += shared/runtime/gchelper_thumb1.s
 else
-	SRC_S += shared/runtime/gchelper_m3.s
+	SRC_S += shared/runtime/gchelper_thumb2.s
 endif
 
 # STM32 Bluetooth stack
