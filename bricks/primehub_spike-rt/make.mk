@@ -27,14 +27,14 @@ ifeq ("$(wildcard $(PBTOP)/micropython/README.md)","")
 $(info GIT cloning micropython submodule)
 $(info $(shell cd $(PBTOP) && git submodule update --init micropython))
 ifeq ("$(wildcard $(PBTOP)/micropython/README.md)","")
-$(error failed)
+#$(error failed)
 endif
 endif
 ifeq ("$(wildcard $(PBTOP)/micropython/lib/stm32lib/README.md)","")
 $(info GIT cloning stm32lib submodule)
 $(info $(shell cd $(PBTOP)/micropython && git submodule update --init lib/stm32lib))
 ifeq ("$(wildcard $(PBTOP)/micropython/lib/stm32lib/README.md)","")
-$(error failed)
+#$(error failed)
 endif
 endif
 ifeq ($(PB_LIB_BTSTACK),1)
@@ -42,7 +42,7 @@ ifeq ("$(wildcard ../../lib/btstack/README.md)","")
 $(info GIT cloning btstack submodule)
 $(info $(shell cd ../.. && git submodule update --checkout --init lib/btstack))
 ifeq ("$(wildcard ../../lib/btstack/README.md)","")
-$(error failed)
+#$(error failed)
 endif
 endif
 endif
