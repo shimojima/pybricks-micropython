@@ -58,12 +58,14 @@ int mp_hal_stdin_rx_chr(void) {
 }
 
 // Send string of given length
-void mp_hal_stdout_tx_strn(const char *str, mp_uint_t len) {
+//void mp_hal_stdout_tx_strn(const char *str, mp_uint_t len) {
+mp_uint_t mp_hal_stdout_tx_strn(const char *str, size_t len) {
     extern void tPutLogTarget_ePutLog_putChar(char c);
     while (len--) {
         tPutLogTarget_ePutLog_putChar(*str++);
     }
     // serial_wri_dat(TASK_PORTID, str, len)
+    return 0;
 }
 
 #else // !PYBRICKS_HUB_DEBUG
