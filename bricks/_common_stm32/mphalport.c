@@ -88,13 +88,17 @@ int mp_hal_stdin_rx_chr(void) {
 }
 
 // Send string of given length
-void mp_hal_stdout_tx_strn(const char *str, mp_uint_t len) {
+mp_uint_t mp_hal_stdout_tx_strn(const char *str, size_t len) {
+    size_t org_len = len;
+
     while (len--) {
         while (!(USART6->SR & USART_SR_TXE)) {
             MICROPY_VM_HOOK_LOOP
         }
         USART6->DR = *str++;
     }
+
+    return org_len;
 }
 
 void mp_hal_stdout_tx_flush(void) {
@@ -127,7 +131,9 @@ int mp_hal_stdin_rx_chr(void) {
 }
 
 // Send string of given length
-void mp_hal_stdout_tx_strn(const char *str, mp_uint_t len) {
+mp_uint_t mp_hal_stdout_tx_strn(const char *str, size_t len) {
+    size_t org_len = len;
+
     while (len) {
         uint32_t size = len;
         pbio_error_t err = pbsys_bluetooth_tx((const uint8_t *)str, &size);
@@ -141,11 +147,13 @@ void mp_hal_stdout_tx_strn(const char *str, mp_uint_t len) {
         if (err != PBIO_ERROR_AGAIN) {
             // Ignoring error for now. This means stdout lost if Bluetooth is
             // disconnected.
-            return;
+            return org_len - len;
         }
 
         MICROPY_EVENT_POLL_HOOK
     }
+
+    return org_len;
 }
 
 void mp_hal_stdout_tx_flush(void) {

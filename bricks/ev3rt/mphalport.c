@@ -75,11 +75,14 @@ int mp_hal_stdin_rx_chr(void) {
 }
 
 // Send string of given length
-void mp_hal_stdout_tx_strn(const char *str, mp_uint_t len) {
+mp_uint_t mp_hal_stdout_tx_strn(const char *str, size_t len) {
     uint32_t in_waiting;
     if (bluetooth_is_connected(&in_waiting)) {
         serial_wri_dat(EV3_SERIAL_BT, str, len);
+        return len;
     }
+
+    return 0;
 }
 
 void mp_hal_stdout_tx_flush(void) {
