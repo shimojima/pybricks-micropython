@@ -61,6 +61,30 @@ void pbio_dcmotor_stop_all(bool clear_parents) {
 }
 
 /**
+ * Tests if all dc motors are coasting.
+ *
+ * @return                  @c true if all motors are coasting, @c false otherwise.
+ */
+bool pbio_dcmotor_all_coasting(void) {
+    for (pbio_port_id_t port = PBDRV_CONFIG_FIRST_MOTOR_PORT; port <= PBDRV_CONFIG_LAST_MOTOR_PORT; port++) {
+        pbio_dcmotor_t *dcmotor;
+        pbio_error_t err = pbio_dcmotor_get_dcmotor(port, &dcmotor);
+        if (err != PBIO_SUCCESS) {
+            continue;
+        }
+        pbio_iodev_type_id_t type_id;
+        err = pbdrv_ioport_get_motor_device_type_id(port, &type_id);
+        if (err != PBIO_SUCCESS) {
+            continue; // It's something other than a motor, so don't touch it.
+        }
+        if (dcmotors->actuation_now != PBIO_DCMOTOR_ACTUATION_COAST) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/**
  * Stops and closes DC motor instance so it can be used in another application.
  *
  * @param [in]  dcmotor     The DC motor instance.
