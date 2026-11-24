@@ -170,17 +170,15 @@ bool pbsys_bluetooth_tx_is_idle(void) {
 void
 pb_bluetooth_uart_put_notify(void)
 {
-  // only allow one UART Tx message in the queue at a time
-  if (!uart_msg.is_queued) {
-      // Setting data and size are deferred until we actually send the message.
-      // This way, if the caller is only writing one byte at a time, we can
-      // still buffer data to send it more efficiently.
-      uart_msg.context.connection = PBDRV_BLUETOOTH_CONNECTION_UART;
-
-      uart_msg.is_queued = true;
-      list_add(send_queue, &uart_msg);
-      process_poll(&pbsys_bluetooth_process);
-  }
+  // NOTE: This function is called (without any lock) from whatever task is
+  // writing to the Bluetooth serial port. Touching send_queue (a Contiki
+  // list) here races with the list operations done by pbsys_bluetooth_process
+  // running in the pybricks task; a corrupted list makes list_add() spin
+  // forever, the supervisor stops feeding the IWDG watchdog and the hub
+  // powers off. So only poke the process here; the actual queueing of
+  // uart_msg is done inside pbsys_bluetooth_process (single context).
+  // (process_poll itself is interrupt/task safe by Contiki design.)
+  process_poll(&pbsys_bluetooth_process);
 }
 
 static pbio_pybricks_error_t handle_receive(pbdrv_bluetooth_connection_t connection, const uint8_t *data, uint32_t size) {
@@ -371,6 +369,20 @@ PROCESS_THREAD(pbsys_bluetooth_process, ev, data) {
                 // REVISIT: this is probably a bit inefficient since it only
                 // needs to be called once each time notifications are enabled
                 PT_INIT(&status_monitor_pt);
+            }
+
+            // Queue the UART Tx message from this process context only (see
+            // pb_bluetooth_uart_put_notify): doing it here avoids racing the
+            // send_queue list operations against other tasks. Only queue when
+            // there really is buffered data, which also keeps the
+            // assert(msg->context.size > 0) below from tripping.
+            {
+                extern int tSIOAsyncPortPybricksBluetooth_eSIOCBR_sizeSend(void);
+                if (!uart_msg.is_queued && tSIOAsyncPortPybricksBluetooth_eSIOCBR_sizeSend() > 0) {
+                    uart_msg.context.connection = PBDRV_BLUETOOTH_CONNECTION_UART;
+                    uart_msg.is_queued = true;
+                    list_add(send_queue, &uart_msg);
+                }
             }
 
             if (!send_busy) {
