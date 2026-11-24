@@ -9,6 +9,7 @@
 #include <stdbool.h>
 
 #include <pbdrv/watchdog.h>
+#include <pbsys/config.h>
 #include <pbsys/status.h>
 
 /**
